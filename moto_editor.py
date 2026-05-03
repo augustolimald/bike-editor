@@ -73,6 +73,8 @@ class CandidateSegment:
     visual_score: float
     speech_score: float
     audio_score: float
+    movement_score: float
+    stopped_score: float
     reason: str
     transcript: str = ""
 
@@ -339,12 +341,57 @@ def transcribe_audio(audio_path: Path, model_size: str, language: str) -> list[T
         language=language,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 600},
+        word_timestamps=True,
     )
-    return [
-        TranscriptSegment(start=float(seg.start), end=float(seg.end), text=seg.text.strip())
-        for seg in segments
-        if seg.text and seg.text.strip()
-    ]
+    transcript: list[TranscriptSegment] = []
+    for seg in segments:
+        words = getattr(seg, "words", None) or []
+        if words:
+            transcript.extend(transcript_segments_from_words(words))
+        elif seg.text and seg.text.strip():
+            transcript.append(TranscriptSegment(start=float(seg.start), end=float(seg.end), text=seg.text.strip()))
+    return transcript
+
+
+def transcript_segments_from_words(words: Iterable[Any]) -> list[TranscriptSegment]:
+    segments: list[TranscriptSegment] = []
+    current_words: list[str] = []
+    current_start: float | None = None
+    current_end: float | None = None
+    previous_end: float | None = None
+
+    def flush() -> None:
+        nonlocal current_words, current_start, current_end
+        text = " ".join(current_words).strip()
+        if text and current_start is not None and current_end is not None:
+            segments.append(TranscriptSegment(start=current_start, end=current_end, text=text))
+        current_words = []
+        current_start = None
+        current_end = None
+
+    for word in words:
+        text = str(getattr(word, "word", "")).strip()
+        start = float(getattr(word, "start", 0.0) or 0.0)
+        end = float(getattr(word, "end", start) or start)
+        if not text:
+            continue
+
+        gap = 0.0 if previous_end is None else start - previous_end
+        current_duration = 0.0 if current_start is None else end - current_start
+        if current_words and (gap > 1.25 or current_duration > 12.0):
+            flush()
+
+        if current_start is None:
+            current_start = start
+        current_words.append(text)
+        current_end = end
+        previous_end = end
+
+        if text.endswith((".", "!", "?")) and current_start is not None and current_end - current_start >= 3.0:
+            flush()
+
+    flush()
+    return segments
 
 
 def analyze_visuals(source: Path, sample_every: float) -> list[dict[str, float]]:
@@ -362,6 +409,7 @@ def analyze_visuals(source: Path, sample_every: float) -> list[dict[str, float]]
 
     samples: list[dict[str, float]] = []
     previous_hist = None
+    previous_gray = None
     t = 0.0
     while t < duration:
         cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
@@ -384,10 +432,22 @@ def analyze_visuals(source: Path, sample_every: float) -> list[dict[str, float]]
             change = 1.0 - float(cv2.compareHist(previous_hist, hist, cv2.HISTCMP_CORREL))
         previous_hist = hist
 
+        motion = 0.0
+        if previous_gray is not None:
+            flow = cv2.calcOpticalFlowFarneback(previous_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            mag, _ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+            h, w = mag.shape
+            roi = mag[int(h * 0.12): int(h * 0.88), int(w * 0.10): int(w * 0.90)]
+            median_motion = float(np.median(roi))
+            p75_motion = float(np.percentile(roi, 75))
+            motion = 0.65 * min(median_motion / 5.0, 1.0) + 0.35 * min(p75_motion / 10.0, 1.0)
+        previous_gray = gray
+
         samples.append(
             {
                 "time": t,
                 "change": max(0.0, min(change, 2.0)),
+                "motion": max(0.0, min(motion, 1.0)),
                 "sharpness": sharpness,
                 "saturation": saturation,
                 "brightness": brightness,
@@ -430,6 +490,23 @@ def window_visual_score(samples: list[dict[str, float]], start: float, end: floa
     return max(0.0, min(1.0, 0.48 * min(change * 4.0, 1.0) + 0.22 * saturation + 0.18 * sharpness + 0.12 * exposure_bonus))
 
 
+def window_movement_score(samples: list[dict[str, float]], start: float, end: float) -> float:
+    values = [s for s in samples if start <= s["time"] < end]
+    if not values:
+        return 0.0
+    return max(0.0, min(1.0, sum(float(s.get("motion", 0.0)) for s in values) / len(values)))
+
+
+def window_stopped_score(samples: list[dict[str, float]], start: float, end: float) -> float:
+    values = [s for s in samples if start <= s["time"] < end]
+    if not values:
+        return 0.0
+    low_motion_ratio = sum(1 for s in values if float(s.get("motion", 0.0)) < 0.14) / len(values)
+    movement = window_movement_score(samples, start, end)
+    movement_penalty = 1.0 - min(movement / 0.35, 1.0)
+    return max(0.0, min(1.0, 0.68 * low_motion_ratio + 0.32 * movement_penalty))
+
+
 def build_candidates(
     duration: float,
     transcript: list[TranscriptSegment],
@@ -449,8 +526,17 @@ def build_candidates(
         word_count = len(text.split())
         speech_score = min(1.0, 0.55 * speech_density + 0.45 * min(word_count / 55.0, 1.0))
         visual_score = window_visual_score(visual_samples, start, end)
+        movement_score = window_movement_score(visual_samples, start, end)
+        stopped_score = window_stopped_score(visual_samples, start, end)
         audio_score = speech_score
-        score = 0.42 * visual_score + 0.46 * speech_score + 0.12 * audio_score
+        non_speech_weight = 1.0 - min(speech_score * 3.0, 1.0)
+        score = 0.64 * speech_score + 0.24 * movement_score + 0.12 * visual_score
+        score -= 0.38 * non_speech_weight * stopped_score
+        if speech_score < 0.12 and movement_score < 0.22:
+            score *= 0.35
+        if speech_score >= 0.30:
+            score += 0.08
+        score = max(0.0, min(1.0, score))
 
         if score > 0.08:
             candidates.append(
@@ -462,7 +548,9 @@ def build_candidates(
                     visual_score=round(visual_score, 4),
                     speech_score=round(speech_score, 4),
                     audio_score=round(audio_score, 4),
-                    reason="heuristic: visual change + narration density",
+                    movement_score=round(movement_score, 4),
+                    stopped_score=round(stopped_score, 4),
+                    reason="heuristic: narration priority + movement + visual change",
                     transcript=text[:900],
                 )
             )
@@ -481,8 +569,13 @@ def heuristic_plan(candidates: list[CandidateSegment], target_seconds: float) ->
     for candidate in sorted(candidates, key=lambda c: c.score, reverse=True):
         if total >= target_seconds:
             break
+        if candidate.speech_score < 0.16 and candidate.stopped_score > 0.55:
+            continue
         too_close = any(abs(candidate.start - existing.start) < 25 for existing in selected)
         if too_close:
+            continue
+        too_redundant = any(transcript_similarity(candidate.transcript, existing.transcript) > 0.58 for existing in selected)
+        if too_redundant:
             continue
         selected.append(candidate)
         total += candidate.duration
@@ -499,6 +592,24 @@ def heuristic_plan(candidates: list[CandidateSegment], target_seconds: float) ->
         requested_title="",
         requested_description="",
     )
+
+
+def transcript_similarity(a: str, b: str) -> float:
+    words_a = normalized_word_set(a)
+    words_b = normalized_word_set(b)
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+def normalized_word_set(text: str) -> set[str]:
+    text = re.sub(r"[^0-9A-Za-zÀ-ÿ]+", " ", text.casefold())
+    words = {word for word in text.split() if len(word) > 3}
+    stopwords = {
+        "aqui", "agora", "assim", "essa", "esse", "isso", "para", "porque", "muito",
+        "não", "uma", "como", "mais", "meu", "minha", "tava", "estou", "estava",
+    }
+    return words - stopwords
 
 
 def plan_with_openai(
@@ -531,6 +642,8 @@ def plan_with_openai(
             "score": c.score,
             "visual_score": c.visual_score,
             "speech_score": c.speech_score,
+            "movement_score": c.movement_score,
+            "stopped_score": c.stopped_score,
             "transcript": c.transcript,
         }
         for c in sorted(candidates, key=lambda c: c.start)
@@ -585,8 +698,13 @@ Creator context:
 
 Goal:
 - Build an engaging {round(target_seconds / 60, 1)} minute video.
-- Prefer moments with interesting narration, reactions, road/scenery changes, and story continuity.
-- Avoid repetitive riding shots unless the scenery clearly changes.
+- Primary priority: moments where the creator is narrating something meaningful, reacting, explaining, comparing bikes, making decisions, or telling a small story.
+- Preserve complete spoken ideas. Avoid cuts that remove the setup or punchline of a narrated thought.
+- Secondary priority: when there is little/no narration, prefer segments where the motorcycle is clearly moving.
+- Avoid stopped/idling moments such as traffic lights, traffic jams, parked moments, or waiting in place unless the narration itself is important.
+- Use movement_score and stopped_score strictly: non-narrated segments should usually have movement_score >= 0.35 and stopped_score <= 0.45.
+- Do not select several stationary or near-stationary segments in sequence.
+- Avoid repetitive riding shots unless the scenery clearly changes and the bike is moving.
 - Keep segments mostly chronological.
 - Use 12 to 45 second segments.
 - Total duration should be close to {round(target_seconds)} seconds.
@@ -646,6 +764,12 @@ Candidate segments:
         original = by_id.get(int(item["id"]))
         if not original:
             continue
+        if original.speech_score < 0.16 and original.stopped_score > 0.55:
+            continue
+        if any(abs(original.start - existing.start) < 20 for existing in selected):
+            continue
+        if any(transcript_similarity(original.transcript, existing.transcript) > 0.62 for existing in selected):
+            continue
         start = max(original.start, float(item["start"]))
         end = min(original.end, float(item["end"]))
         if end - start < 5:
@@ -659,6 +783,8 @@ Candidate segments:
                 visual_score=original.visual_score,
                 speech_score=original.speech_score,
                 audio_score=original.audio_score,
+                movement_score=original.movement_score,
+                stopped_score=original.stopped_score,
                 reason=str(item.get("reason", "OpenAI selection")),
                 transcript=original.transcript,
             )
@@ -789,7 +915,7 @@ def write_plan_outputs(plan: EditPlan, output_dir: Path, plan_json_path: Path | 
 
     with plan_csv_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["id", "start", "end", "duration", "score", "reason", "transcript"])
+        writer.writerow(["id", "start", "end", "duration", "score", "speech_score", "movement_score", "stopped_score", "reason", "transcript"])
         for segment in plan.segments:
             writer.writerow(
                 [
@@ -798,6 +924,9 @@ def write_plan_outputs(plan: EditPlan, output_dir: Path, plan_json_path: Path | 
                     segment.end,
                     round(segment.duration, 2),
                     segment.score,
+                    segment.speech_score,
+                    segment.movement_score,
+                    segment.stopped_score,
                     segment.reason,
                     segment.transcript,
                 ]
@@ -1075,7 +1204,11 @@ def load_transcript(path: Path) -> list[TranscriptSegment] | None:
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [TranscriptSegment(start=float(item["start"]), end=float(item["end"]), text=str(item["text"])) for item in data]
+    transcript = [TranscriptSegment(start=float(item["start"]), end=float(item["end"]), text=str(item["text"])) for item in data]
+    if any(segment.end - segment.start > 60.0 for segment in transcript):
+        print(f"Cached transcript uses older long-segment format; recomputing: {path}")
+        return None
+    return transcript
 
 
 def load_candidates(path: Path) -> list[CandidateSegment] | None:
@@ -1093,10 +1226,15 @@ def load_candidates(path: Path) -> list[CandidateSegment] | None:
                 visual_score=float(item["visual_score"]),
                 speech_score=float(item["speech_score"]),
                 audio_score=float(item["audio_score"]),
+                movement_score=float(item.get("movement_score", -1.0)),
+                stopped_score=float(item.get("stopped_score", -1.0)),
                 reason=str(item.get("reason", "")),
                 transcript=str(item.get("transcript", "")),
             )
         )
+    if any(candidate.movement_score < 0.0 or candidate.stopped_score < 0.0 for candidate in candidates):
+        print(f"Cached candidates do not include movement metrics; recomputing: {path}")
+        return None
     return candidates
 
 
@@ -1127,11 +1265,16 @@ def load_plan(path: Path) -> EditPlan | None:
             visual_score=float(item["visual_score"]),
             speech_score=float(item["speech_score"]),
             audio_score=float(item["audio_score"]),
+            movement_score=float(item.get("movement_score", -1.0)),
+            stopped_score=float(item.get("stopped_score", -1.0)),
             reason=str(item.get("reason", "")),
             transcript=str(item.get("transcript", "")),
         )
         for item in data.get("segments", [])
     ]
+    if any(segment.movement_score < 0.0 or segment.stopped_score < 0.0 for segment in segments):
+        print(f"Cached edit plan does not include movement metrics; asking for a new plan: {path}")
+        return None
     return EditPlan(
         title=str(data.get("title") or "Passeio de moto"),
         description=str(data.get("description") or ""),
@@ -1249,7 +1392,11 @@ def main(argv: Iterable[str]) -> int:
     visual_samples = None
     if visual_samples_path.exists() and not args.force_analysis:
         visual_samples = json.loads(visual_samples_path.read_text(encoding="utf-8"))
-        print(f"Reusing cached visual samples: {visual_samples_path}")
+        if visual_samples and "motion" not in visual_samples[0]:
+            print(f"Cached visual samples do not include motion metrics; recomputing: {visual_samples_path}")
+            visual_samples = None
+        else:
+            print(f"Reusing cached visual samples: {visual_samples_path}")
     if visual_samples is None:
         visual_samples = analyze_visuals(source, args.sample_every)
         visual_samples_path.write_text(json.dumps(visual_samples, indent=2), encoding="utf-8")

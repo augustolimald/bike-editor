@@ -14,7 +14,7 @@ The pipeline:
 4. Extract and clean narration audio.
 5. Transcribe locally with `faster-whisper`.
 6. Analyze visual changes with OpenCV.
-7. Build candidate windows and score them.
+7. Build candidate windows and score them with narration, movement, stopped/idling, and visual metrics.
 8. Use OpenAI, when enabled, to choose the edit plan and generate YouTube metadata.
 9. Render selected segments with FFmpeg filters.
 10. Generate a thumbnail using a real frame plus an AI-created overlay.
@@ -92,6 +92,16 @@ OpenAI calls are used for:
 - Creating a transparent thumbnail overlay.
 
 The script should continue to support a local fallback via heuristics and local thumbnail generation.
+
+## Edit Selection
+
+Candidate scoring should preserve this priority order:
+
+1. Narrated moments with complete spoken ideas.
+2. Non-narrated moments where the motorcycle is clearly moving.
+3. Visual variety only after narration and movement are considered.
+
+Avoid selecting repeated stopped/idling segments such as traffic lights unless the narration in that segment is important. OpenAI receives `speech_score`, `movement_score`, `stopped_score`, and `visual_score`; keep those fields useful and auditable in `edit_plan_XXmin.csv`.
 
 ## Thumbnail Behavior
 

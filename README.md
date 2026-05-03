@@ -106,6 +106,18 @@ O script reaproveita trabalho já existente na pasta de saída:
 - Pontuação de candidatos existente é reutilizada.
 - Um plano compatível é reutilizado para o mesmo tempo alvo.
 - Vídeos e thumbnails já renderizados são reutilizados, a menos que você force a recriação.
+- Quando o formato da análise fica antigo, por exemplo sem métricas de movimento, o script invalida o cache automaticamente e refaz a parte necessária.
+
+## Como os trechos são escolhidos
+
+A seleção combina sinais locais com decisão da IA:
+
+- `speech_score`: prioriza trechos em que há narração relevante.
+- `movement_score`: mede movimento visual amplo por optical flow, útil para diferenciar moto andando de moto parada.
+- `stopped_score`: penaliza trechos com baixa movimentação, como semáforo, trânsito parado ou espera.
+- `visual_score`: ainda considera mudança de paisagem, cor, nitidez e exposição, mas não deve superar fala e movimento.
+
+A regra principal é: narração primeiro; se não houver fala, priorizar a moto em movimento; evitar paradas sem narração.
 
 Flags úteis:
 
