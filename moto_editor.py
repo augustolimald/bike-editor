@@ -54,7 +54,7 @@ DEFAULT_AUDIO_ENHANCE_FILTER = (
 DEFAULT_RENDER_PRESET = "fast"
 DEFAULT_RENDER_CRF = 22
 DEFAULT_AUDIO_BITRATE = "128k"
-OUTPUT_VERSION = 2
+OUTPUT_VERSION = 3
 
 
 @dataclass
@@ -592,6 +592,76 @@ def heuristic_plan(candidates: list[CandidateSegment], target_seconds: float) ->
         requested_title="",
         requested_description="",
     )
+
+
+def preserve_complete_speech(
+    plan: EditPlan,
+    transcript: list[TranscriptSegment],
+    source_duration: float,
+) -> EditPlan:
+    expanded = [expand_segment_to_complete_speech(segment, transcript, source_duration) for segment in plan.segments]
+    plan.segments = merge_touching_segments(expanded)
+    return plan
+
+
+def expand_segment_to_complete_speech(
+    segment: CandidateSegment,
+    transcript: list[TranscriptSegment],
+    source_duration: float,
+) -> CandidateSegment:
+    overlapping = [
+        speech
+        for speech in transcript
+        if max(0.0, min(segment.end, speech.end) - max(segment.start, speech.start)) >= 0.2
+    ]
+    if not overlapping:
+        return segment
+
+    start = min(segment.start, min(speech.start for speech in overlapping) - 0.8)
+    end = max(segment.end, max(speech.end for speech in overlapping) + 0.8)
+    start = max(0.0, start)
+    end = min(source_duration, end)
+
+    if start == segment.start and end == segment.end:
+        return segment
+
+    return CandidateSegment(
+        id=segment.id,
+        start=round(start, 2),
+        end=round(end, 2),
+        score=segment.score,
+        visual_score=segment.visual_score,
+        speech_score=segment.speech_score,
+        audio_score=segment.audio_score,
+        movement_score=segment.movement_score,
+        stopped_score=segment.stopped_score,
+        reason=segment.reason + " | expanded to preserve complete speech",
+        transcript=segment.transcript,
+    )
+
+
+def merge_touching_segments(segments: list[CandidateSegment]) -> list[CandidateSegment]:
+    if not segments:
+        return []
+
+    merged: list[CandidateSegment] = []
+    for segment in sorted(segments, key=lambda item: item.start):
+        if not merged or segment.start > merged[-1].end + 0.5:
+            merged.append(segment)
+            continue
+
+        previous = merged[-1]
+        previous.end = round(max(previous.end, segment.end), 2)
+        previous.score = round(max(previous.score, segment.score), 4)
+        previous.visual_score = round(max(previous.visual_score, segment.visual_score), 4)
+        previous.speech_score = round(max(previous.speech_score, segment.speech_score), 4)
+        previous.audio_score = round(max(previous.audio_score, segment.audio_score), 4)
+        previous.movement_score = round(max(previous.movement_score, segment.movement_score), 4)
+        previous.stopped_score = round(min(previous.stopped_score, segment.stopped_score), 4)
+        previous.reason = previous.reason + " | merged with adjacent narrated segment"
+        previous.transcript = (previous.transcript + " " + segment.transcript).strip()[:1400]
+
+    return merged
 
 
 def transcript_similarity(a: str, b: str) -> float:
@@ -1240,6 +1310,7 @@ def load_candidates(path: Path) -> list[CandidateSegment] | None:
 
 def plan_to_json(plan: EditPlan) -> dict[str, Any]:
     return {
+        "format_version": OUTPUT_VERSION,
         "title": plan.title,
         "description": plan.description,
         "thumbnail_text": plan.thumbnail_text,
@@ -1256,6 +1327,9 @@ def load_plan(path: Path) -> EditPlan | None:
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
+    if int(data.get("format_version", 0) or 0) < OUTPUT_VERSION:
+        print(f"Cached edit plan uses older format; asking for a new plan: {path}")
+        return None
     segments = [
         CandidateSegment(
             id=int(item["id"]),
@@ -1451,6 +1525,7 @@ def main(argv: Iterable[str]) -> int:
             plan.description = requested_description
             plan.requested_description = requested_description
 
+    plan = preserve_complete_speech(plan, transcript, duration)
     write_plan_outputs(plan, output_dir, plan_json_path=plan_json_path, plan_csv_path=plan_csv_path)
     render_final(
         source=source,

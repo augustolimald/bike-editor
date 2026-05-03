@@ -106,7 +106,7 @@ O script reaproveita trabalho já existente na pasta de saída:
 - Pontuação de candidatos existente é reutilizada.
 - Um plano compatível é reutilizado para o mesmo tempo alvo.
 - Vídeos e thumbnails já renderizados são reutilizados, a menos que você force a recriação.
-- Quando o formato da análise fica antigo, por exemplo sem métricas de movimento, o script invalida o cache automaticamente e refaz a parte necessária.
+- Quando o formato da análise fica antigo, por exemplo sem métricas de movimento ou proteção de fala completa, o script invalida o cache automaticamente e refaz a parte necessária.
 
 ## Como os trechos são escolhidos
 
@@ -118,6 +118,8 @@ A seleção combina sinais locais com decisão da IA:
 - `visual_score`: ainda considera mudança de paisagem, cor, nitidez e exposição, mas não deve superar fala e movimento.
 
 A regra principal é: narração primeiro; se não houver fala, priorizar a moto em movimento; evitar paradas sem narração.
+
+Depois que o plano é escolhido, o script expande cortes narrados para incluir o começo e o fim das falas transcritas que encostam naquele trecho. Cortes que ficam colados ou sobrepostos depois dessa expansão são unidos para evitar repetição e preservar continuidade.
 
 Flags úteis:
 

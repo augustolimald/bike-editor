@@ -103,6 +103,8 @@ Candidate scoring should preserve this priority order:
 
 Avoid selecting repeated stopped/idling segments such as traffic lights unless the narration in that segment is important. OpenAI receives `speech_score`, `movement_score`, `stopped_score`, and `visual_score`; keep those fields useful and auditable in `edit_plan_XXmin.csv`.
 
+After plan selection, preserve complete speech by expanding narrated cuts to include the full overlapping transcript segments, then merge adjacent/overlapping cuts. Bump the cached plan format version whenever changing this post-processing behavior.
+
 ## Thumbnail Behavior
 
 The thumbnail should preserve the original video frame. The image model should create only an overlay layer with text and minimal contextually justified graphic elements. Avoid prompts that let the model recreate the motorcycle dashboard, rider, road, or scenery.
