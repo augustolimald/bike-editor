@@ -56,6 +56,7 @@ Configurações importantes:
 - `IMAGE_MODEL`: modelo usado para gerar a camada da thumbnail.
 - `CREATOR_*`, `PREVIOUS_MOTORCYCLE_*`, `CURRENT_MOTORCYCLE_*`: contexto opcional do canal para ajudar a IA a evitar erros factuais.
 - `VIDEO_ENHANCE_FILTER` e `AUDIO_ENHANCE_FILTER`: filtros do FFmpeg para limpar imagem e áudio.
+- `ENABLE_STABILIZATION` e `STABILIZATION_FILTER`: estabilização opcional para vídeos com muita tremedeira.
 
 O `.env` é ignorado pelo Git, então sua chave de API e contexto pessoal não devem ser commitados.
 
@@ -116,6 +117,7 @@ Flags úteis:
 --force-thumbnail   # gera uma nova thumbnail
 --no-openai         # roda sem OpenAI
 --local-thumbnail   # pula thumbnail via OpenAI e usa texto local
+--stabilize         # aplica estabilização com FFmpeg durante o render
 ```
 
 ## Observações

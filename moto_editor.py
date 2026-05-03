@@ -54,6 +54,8 @@ DEFAULT_AUDIO_ENHANCE_FILTER = (
 DEFAULT_RENDER_PRESET = "fast"
 DEFAULT_RENDER_CRF = 22
 DEFAULT_AUDIO_BITRATE = "128k"
+DEFAULT_ENABLE_STABILIZATION = False
+DEFAULT_STABILIZATION_FILTER = "deshake=rx=16:ry=16:edge=mirror:blocksize=16:contrast=100:search=less"
 OUTPUT_VERSION = 2
 
 
@@ -164,12 +166,31 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def camera_overlap_seconds() -> float:
     return env_float("CAMERA_OVERLAP_SECONDS", DEFAULT_CAMERA_OVERLAP_SECONDS)
 
 
 def video_enhance_filter() -> str:
     return env_str("VIDEO_ENHANCE_FILTER", DEFAULT_VIDEO_ENHANCE_FILTER)
+
+
+def stabilization_filter() -> str:
+    return env_str("STABILIZATION_FILTER", DEFAULT_STABILIZATION_FILTER)
+
+
+def build_video_filter(enable_stabilization: bool) -> str:
+    filters = []
+    if enable_stabilization:
+        filters.append(stabilization_filter())
+    filters.append(video_enhance_filter())
+    return ",".join(part for part in filters if part)
 
 
 def audio_enhance_filter() -> str:
@@ -815,6 +836,7 @@ def render_final(
     render_preset: str,
     render_crf: int,
     audio_bitrate: str,
+    stabilize: bool,
     force_render: bool,
     dry_run: bool = False,
 ) -> None:
@@ -843,7 +865,7 @@ def render_final(
                 "-i",
                 str(source),
                 "-vf",
-                video_enhance_filter(),
+                build_video_filter(stabilize),
                 "-af",
                 audio_enhance_filter(),
                 "-c:v",
@@ -1189,6 +1211,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--render-preset", default=env_str("RENDER_PRESET", DEFAULT_RENDER_PRESET), help="libx264 preset: faster, fast, medium, slow.")
     parser.add_argument("--render-crf", type=int, default=env_int("RENDER_CRF", DEFAULT_RENDER_CRF), help="libx264 CRF. Lower is bigger/better; 21-23 is a good YouTube range.")
     parser.add_argument("--audio-bitrate", default=env_str("AUDIO_BITRATE", DEFAULT_AUDIO_BITRATE), help="AAC audio bitrate for final segments.")
+    parser.add_argument("--stabilize", action="store_true", default=env_bool("ENABLE_STABILIZATION", DEFAULT_ENABLE_STABILIZATION), help="Apply FFmpeg video stabilization before image enhancement.")
     parser.add_argument("--force-render", action="store_true", help="Re-render selected segments and final video even if files already exist.")
     parser.add_argument("--force-analysis", action="store_true", help="Recompute local transcript, visual samples, and candidates.")
     parser.add_argument("--force-ai", action="store_true", help="Ask OpenAI for a new edit plan even if a compatible plan exists.")
@@ -1313,6 +1336,7 @@ def main(argv: Iterable[str]) -> int:
         render_preset=args.render_preset,
         render_crf=args.render_crf,
         audio_bitrate=args.audio_bitrate,
+        stabilize=args.stabilize,
         force_render=args.force_render,
         dry_run=args.dry_run,
     )
