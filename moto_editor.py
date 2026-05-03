@@ -54,7 +54,24 @@ DEFAULT_AUDIO_ENHANCE_FILTER = (
 DEFAULT_RENDER_PRESET = "fast"
 DEFAULT_RENDER_CRF = 22
 DEFAULT_AUDIO_BITRATE = "128k"
-OUTPUT_VERSION = 3
+OUTPUT_VERSION = 4
+CANDIDATES_VERSION = 2
+
+EXCLUDE_DIRECTIVES = (
+    "corta isso aqui",
+    "corte isso aqui",
+    "pode cortar isso aqui",
+    "tira isso aqui",
+    "remove isso aqui",
+)
+INCLUDE_DIRECTIVES = (
+    "isso precisa aparecer no video",
+    "isso precisa aparecer no vídeo",
+    "isso tem que aparecer no video",
+    "isso tem que aparecer no vídeo",
+    "coloca isso no video",
+    "coloca isso no vídeo",
+)
 
 
 @dataclass
@@ -557,8 +574,77 @@ def build_candidates(
             segment_id += 1
         start += stride_seconds
 
+    candidates = apply_creator_directives(candidates, transcript)
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates[:limit]
+
+
+def apply_creator_directives(
+    candidates: list[CandidateSegment],
+    transcript: list[TranscriptSegment],
+) -> list[CandidateSegment]:
+    if not candidates:
+        return []
+
+    excluded_indexes: set[int] = set()
+    included_indexes: set[int] = set()
+    chronological = sorted(candidates, key=lambda item: item.start)
+
+    for segment in transcript:
+        text = normalize_directive_text(segment.text)
+        if any(phrase in text for phrase in EXCLUDE_DIRECTIVES):
+            excluded_indexes.update(neighbor_candidate_indexes(chronological, segment))
+        if any(phrase in text for phrase in INCLUDE_DIRECTIVES):
+            included_indexes.update(neighbor_candidate_indexes(chronological, segment))
+
+    if not excluded_indexes and not included_indexes:
+        return candidates
+
+    adjusted: list[CandidateSegment] = []
+    for index, candidate in enumerate(chronological):
+        if index in excluded_indexes:
+            continue
+        if index in included_indexes:
+            candidate.score = max(candidate.score, 0.99)
+            candidate.reason += " | creator directive: must include with adjacent context"
+        adjusted.append(candidate)
+
+    return adjusted
+
+
+def normalize_directive_text(text: str) -> str:
+    text = text.casefold()
+    replacements = str.maketrans({
+        "á": "a", "à": "a", "â": "a", "ã": "a",
+        "é": "e", "ê": "e",
+        "í": "i",
+        "ó": "o", "ô": "o", "õ": "o",
+        "ú": "u",
+        "ç": "c",
+    })
+    text = text.translate(replacements)
+    return re.sub(r"\s+", " ", re.sub(r"[^0-9a-z]+", " ", text)).strip()
+
+
+def neighbor_candidate_indexes(
+    candidates: list[CandidateSegment],
+    directive: TranscriptSegment,
+) -> set[int]:
+    if not candidates:
+        return set()
+    midpoint = (directive.start + directive.end) / 2.0
+    current_index = min(
+        range(len(candidates)),
+        key=lambda index: (
+            0 if candidates[index].start <= midpoint <= candidates[index].end else 1,
+            abs(((candidates[index].start + candidates[index].end) / 2.0) - midpoint),
+        ),
+    )
+    return {
+        index
+        for index in (current_index - 1, current_index, current_index + 1)
+        if 0 <= index < len(candidates)
+    }
 
 
 def heuristic_plan(candidates: list[CandidateSegment], target_seconds: float) -> EditPlan:
@@ -566,9 +652,17 @@ def heuristic_plan(candidates: list[CandidateSegment], target_seconds: float) ->
     used_until = -1.0
     total = 0.0
 
+    forced = [candidate for candidate in sorted(candidates, key=lambda c: c.start) if is_forced_include(candidate)]
+    for candidate in forced:
+        selected.append(candidate)
+        total += candidate.duration
+        used_until = max(used_until, candidate.end)
+
     for candidate in sorted(candidates, key=lambda c: c.score, reverse=True):
         if total >= target_seconds:
             break
+        if any(candidate.id == existing.id for existing in selected):
+            continue
         if candidate.speech_score < 0.16 and candidate.stopped_score > 0.55:
             continue
         too_close = any(abs(candidate.start - existing.start) < 25 for existing in selected)
@@ -602,6 +696,10 @@ def preserve_complete_speech(
     expanded = [expand_segment_to_complete_speech(segment, transcript, source_duration) for segment in plan.segments]
     plan.segments = merge_touching_segments(expanded)
     return plan
+
+
+def is_forced_include(candidate: CandidateSegment) -> bool:
+    return "creator directive: must include" in candidate.reason
 
 
 def expand_segment_to_complete_speech(
@@ -714,6 +812,7 @@ def plan_with_openai(
             "speech_score": c.speech_score,
             "movement_score": c.movement_score,
             "stopped_score": c.stopped_score,
+            "reason": c.reason,
             "transcript": c.transcript,
         }
         for c in sorted(candidates, key=lambda c: c.start)
@@ -775,6 +874,8 @@ Goal:
 - Use movement_score and stopped_score strictly: non-narrated segments should usually have movement_score >= 0.35 and stopped_score <= 0.45.
 - Do not select several stationary or near-stationary segments in sequence.
 - Avoid repetitive riding shots unless the scenery clearly changes and the bike is moving.
+- Candidates marked "creator directive: must include" came from the rider saying this must appear in the video. Include those candidates, including adjacent context, unless impossible.
+- Candidate windows that matched a rider "cut this" command have already been removed from the list.
 - Keep segments mostly chronological.
 - Use 12 to 45 second segments.
 - Total duration should be close to {round(target_seconds)} seconds.
@@ -830,9 +931,16 @@ Candidate segments:
 
     by_id = {c.id: c for c in candidates}
     selected: list[CandidateSegment] = []
+    selected_ids: set[int] = set()
+    for forced in sorted((c for c in candidates if is_forced_include(c)), key=lambda c: c.start):
+        selected.append(forced)
+        selected_ids.add(forced.id)
+
     for item in data.get("segments", []):
         original = by_id.get(int(item["id"]))
         if not original:
+            continue
+        if original.id in selected_ids:
             continue
         if original.speech_score < 0.16 and original.stopped_score > 0.55:
             continue
@@ -859,6 +967,7 @@ Candidate segments:
                 transcript=original.transcript,
             )
         )
+        selected_ids.add(original.id)
 
     if not selected:
         return None
@@ -1285,8 +1394,16 @@ def load_candidates(path: Path) -> list[CandidateSegment] | None:
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        if int(data.get("format_version", 0) or 0) < CANDIDATES_VERSION:
+            print(f"Cached candidates use older format; recomputing: {path}")
+            return None
+        items = data.get("candidates", [])
+    else:
+        print(f"Cached candidates use older list format; recomputing: {path}")
+        return None
     candidates: list[CandidateSegment] = []
-    for item in data:
+    for item in items:
         candidates.append(
             CandidateSegment(
                 id=int(item["id"]),
@@ -1306,6 +1423,13 @@ def load_candidates(path: Path) -> list[CandidateSegment] | None:
         print(f"Cached candidates do not include movement metrics; recomputing: {path}")
         return None
     return candidates
+
+
+def candidates_to_json(candidates: list[CandidateSegment]) -> dict[str, Any]:
+    return {
+        "format_version": CANDIDATES_VERSION,
+        "candidates": [asdict(candidate) for candidate in candidates],
+    }
 
 
 def plan_to_json(plan: EditPlan) -> dict[str, Any]:
@@ -1487,7 +1611,7 @@ def main(argv: Iterable[str]) -> int:
             limit=args.candidate_limit,
         )
         candidates_path.write_text(
-            json.dumps([asdict(candidate) for candidate in candidates], ensure_ascii=False, indent=2),
+            json.dumps(candidates_to_json(candidates), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     else:

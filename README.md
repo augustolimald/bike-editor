@@ -119,6 +119,13 @@ A seleção combina sinais locais com decisão da IA:
 
 A regra principal é: narração primeiro; se não houver fala, priorizar a moto em movimento; evitar paradas sem narração.
 
+Você também pode dar comandos durante a gravação:
+
+- Dizer `corta isso aqui` remove o trecho atual e os candidatos imediatamente anterior e posterior.
+- Dizer `isso precisa aparecer no vídeo` força a inclusão do trecho atual e dos candidatos imediatamente anterior e posterior.
+
+Esses comandos são aplicados localmente a partir da transcrição antes da IA escolher o plano, então servem como direção editorial explícita para vídeos futuros.
+
 Depois que o plano é escolhido, o script expande cortes narrados para incluir o começo e o fim das falas transcritas que encostam naquele trecho. Cortes que ficam colados ou sobrepostos depois dessa expansão são unidos para evitar repetição e preservar continuidade.
 
 Flags úteis:
