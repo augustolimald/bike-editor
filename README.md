@@ -1,30 +1,30 @@
 # Bike Editor
 
-Bike Editor is a Python tool that turns long motorcycle camera recordings into a shorter YouTube-ready motovlog.
+Bike Editor é uma ferramenta em Python para transformar longas gravações de câmera de moto em um motovlog mais curto, pronto para o YouTube.
 
-It was built for the common action-camera workflow where one ride becomes many video files and each file overlaps a little with the next one. The script joins the clips, removes the duplicated overlap, analyzes the ride, selects the best moments, renders a final edit, and prepares YouTube metadata.
+Ela foi criada para o fluxo comum de câmeras de ação: um passeio vira vários arquivos de vídeo, e cada arquivo pode repetir alguns segundos do anterior. O script junta os clipes, remove o trecho duplicado, analisa o passeio, escolhe os melhores momentos, renderiza o vídeo final e prepara os metadados do YouTube.
 
-![Bike Editor process diagram](processo_video_youtube.jpg)
+![Diagrama do processo do Bike Editor](processo_video_youtube.jpg)
 
-## What It Does
+## O Que Ele Faz
 
-- Finds all videos in an input folder.
-- Joins them into one continuous source while removing the fixed camera overlap.
-- Improves image and audio with FFmpeg filters.
-- Transcribes narration locally with `faster-whisper`.
-- Scores candidate segments using narration density and visual changes.
-- Uses the OpenAI API, when configured, to choose the final edit plan.
-- Renders a final MP4 with the selected segments.
-- Generates a thumbnail from a real frame plus an AI-created overlay.
-- Writes `youtube.md` with title, description, tags, and thumbnail text.
+- Encontra todos os vídeos em uma pasta de entrada.
+- Junta os clipes em uma fonte contínua, removendo o overlap fixo da câmera.
+- Melhora imagem e áudio com filtros do FFmpeg.
+- Transcreve a narração localmente com `faster-whisper`.
+- Pontua trechos candidatos usando densidade de fala e mudanças visuais.
+- Usa a OpenAI API, quando configurada, para escolher o plano final de edição.
+- Renderiza um MP4 final com os segmentos selecionados.
+- Gera uma thumbnail usando um frame real do vídeo com uma camada criada por IA.
+- Escreve `youtube.md` com título, descrição, tags e texto de thumbnail.
 
-## Requirements
+## Requisitos
 
 - Python 3.10+
-- FFmpeg and FFprobe available in your terminal
-- An OpenAI API key if you want AI-assisted edit decisions and thumbnails
+- FFmpeg e FFprobe disponíveis no terminal
+- Uma chave da OpenAI API se você quiser decisões de edição e thumbnails assistidas por IA
 
-Install Python dependencies:
+Instale as dependências Python:
 
 ```bash
 python3 -m venv .venv
@@ -32,92 +32,92 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-On macOS, FFmpeg can be installed with:
+No macOS, o FFmpeg pode ser instalado com:
 
 ```bash
 brew install ffmpeg
 ```
 
-## Configuration
+## Configuração
 
-Copy the example environment file:
+Copie o arquivo de exemplo:
 
 ```bash
 cp .env.example .env
 ```
 
-Then edit `.env` with your own values.
+Depois edite o `.env` com seus próprios valores.
 
-Important settings:
+Configurações importantes:
 
-- `OPENAI_API_KEY`: your OpenAI API key.
-- `CAMERA_OVERLAP_SECONDS`: how much duplicated video exists at the beginning of each clip after the first one.
-- `AI_MODEL`: model used for edit decisions and YouTube metadata.
-- `IMAGE_MODEL`: model used for thumbnail overlay generation.
-- `CREATOR_*`, `PREVIOUS_MOTORCYCLE_*`, `CURRENT_MOTORCYCLE_*`: optional channel context used so the AI can avoid factual mistakes.
-- `VIDEO_ENHANCE_FILTER` and `AUDIO_ENHANCE_FILTER`: FFmpeg filters for image and audio cleanup.
+- `OPENAI_API_KEY`: sua chave da OpenAI API.
+- `CAMERA_OVERLAP_SECONDS`: quantos segundos duplicados existem no começo de cada clipe depois do primeiro.
+- `AI_MODEL`: modelo usado para decisões de edição e metadados do YouTube.
+- `IMAGE_MODEL`: modelo usado para gerar a camada da thumbnail.
+- `CREATOR_*`, `PREVIOUS_MOTORCYCLE_*`, `CURRENT_MOTORCYCLE_*`: contexto opcional do canal para ajudar a IA a evitar erros factuais.
+- `VIDEO_ENHANCE_FILTER` e `AUDIO_ENHANCE_FILTER`: filtros do FFmpeg para limpar imagem e áudio.
 
-`.env` is ignored by Git, so your API key and personal context should not be committed.
+O `.env` é ignorado pelo Git, então sua chave de API e contexto pessoal não devem ser commitados.
 
-## Usage
+## Uso
 
-Basic run:
+Execução básica:
 
 ```bash
 python moto_editor.py \
-  --input "/path/to/videos" \
+  --input "/caminho/para/videos" \
   --target-minutes 10 \
-  --output-dir "./outputs/my-ride"
+  --output-dir "./outputs/meu-role"
 ```
 
-With an optional title and description:
+Com título e descrição opcionais:
 
 ```bash
 python moto_editor.py \
-  --input "/path/to/videos" \
+  --input "/caminho/para/videos" \
   --target-minutes 10 \
   --title "Primeiro passeio com a moto nova" \
   --description "Um rolê curto para sentir a moto na cidade." \
-  --output-dir "./outputs/my-ride"
+  --output-dir "./outputs/meu-role"
 ```
 
-If title or description are provided, the AI reviews and improves them while preserving the intent. If they are omitted, the AI generates them from the video context.
+Se título ou descrição forem informados, a IA revisa e melhora mantendo a intenção. Se forem omitidos, a IA gera esses textos a partir do contexto do vídeo.
 
 ## Outputs
 
-For a 10-minute target, the output folder will contain files like:
+Para um alvo de 10 minutos, a pasta de saída terá arquivos como:
 
-- `moto_editado_10min.mp4`: final edited video.
-- `thumbnail_openai_10min.png`: generated thumbnail, when OpenAI image generation is enabled.
-- `youtube.md`: title, description, tags, and thumbnail text.
-- `edit_plan_10min.json`: structured edit plan.
-- `edit_plan_10min.csv`: selected cuts in spreadsheet-friendly format.
-- `transcript.json`: local transcription.
-- `candidates.json`: scored candidate segments.
+- `moto_editado_10min.mp4`: vídeo final editado.
+- `thumbnail_openai_10min.png`: thumbnail gerada, quando a geração de imagem da OpenAI estiver ativa.
+- `youtube.md`: título, descrição, tags e texto de thumbnail.
+- `edit_plan_10min.json`: plano de edição estruturado.
+- `edit_plan_10min.csv`: cortes selecionados em formato amigável para planilhas.
+- `transcript.json`: transcrição local.
+- `candidates.json`: trechos candidatos pontuados.
 
-The `outputs/` folder is ignored by Git because rendered videos and work files can be very large.
+A pasta `outputs/` é ignorada pelo Git porque vídeos renderizados e arquivos de trabalho podem ficar muito grandes.
 
-## Caching
+## Cache
 
-The script reuses work already present in the output folder:
+O script reaproveita trabalho já existente na pasta de saída:
 
-- Existing transcription is reused.
-- Visual analysis is reused.
-- Candidate segment scoring is reused.
-- A matching edit plan is reused for the same target duration.
-- Existing rendered videos and thumbnails are reused unless forced.
+- Transcrição existente é reutilizada.
+- Análise visual existente é reutilizada.
+- Pontuação de candidatos existente é reutilizada.
+- Um plano compatível é reutilizado para o mesmo tempo alvo.
+- Vídeos e thumbnails já renderizados são reutilizados, a menos que você force a recriação.
 
-Useful flags:
+Flags úteis:
 
 ```bash
---force-analysis    # recompute transcript, visual samples, and candidates
---force-ai          # ask OpenAI for a fresh edit plan
---force-render      # render segments and final video again
---force-thumbnail   # generate a new thumbnail
---no-openai         # run without OpenAI
---local-thumbnail   # skip OpenAI thumbnail and use local text overlay
+--force-analysis    # refaz transcrição, amostras visuais e candidatos
+--force-ai          # pede um novo plano para a OpenAI
+--force-render      # renderiza segmentos e vídeo final novamente
+--force-thumbnail   # gera uma nova thumbnail
+--no-openai         # roda sem OpenAI
+--local-thumbnail   # pula thumbnail via OpenAI e usa texto local
 ```
 
-## Notes
+## Observações
 
-ChatGPT Plus and OpenAI API billing are separate products. This project uses the OpenAI API, so you need an API key with available billing or credits.
+ChatGPT Plus e cobrança/créditos da OpenAI API são produtos separados. Este projeto usa a OpenAI API, então você precisa de uma chave de API com billing ou créditos disponíveis.
