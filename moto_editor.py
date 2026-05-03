@@ -54,8 +54,8 @@ DEFAULT_AUDIO_ENHANCE_FILTER = (
 DEFAULT_RENDER_PRESET = "fast"
 DEFAULT_RENDER_CRF = 22
 DEFAULT_AUDIO_BITRATE = "128k"
-OUTPUT_VERSION = 4
-CANDIDATES_VERSION = 2
+OUTPUT_VERSION = 5
+CANDIDATES_VERSION = 3
 
 EXCLUDE_DIRECTIVES = (
     "corta isso aqui",
@@ -71,6 +71,18 @@ INCLUDE_DIRECTIVES = (
     "isso tem que aparecer no vídeo",
     "coloca isso no video",
     "coloca isso no vídeo",
+)
+ALWAYS_INCLUDE_PHRASES = (
+    "bem vindo",
+    "bem vindos",
+    "bom dia",
+    "boa tarde",
+    "boa noite",
+    "obrigado por assistir",
+    "obrigado por assistirem",
+    "ate mais",
+    "ate a proxima",
+    "valeu",
 )
 
 
@@ -594,9 +606,10 @@ def apply_creator_directives(
         text = normalize_directive_text(segment.text)
         if any(phrase in text for phrase in EXCLUDE_DIRECTIVES):
             excluded_indexes.update(neighbor_candidate_indexes(chronological, segment))
-        if any(phrase in text for phrase in INCLUDE_DIRECTIVES):
+        if should_force_include_text(text):
             included_indexes.update(neighbor_candidate_indexes(chronological, segment))
 
+    excluded_indexes -= included_indexes
     if not excluded_indexes and not included_indexes:
         return candidates
 
@@ -610,6 +623,10 @@ def apply_creator_directives(
         adjusted.append(candidate)
 
     return adjusted
+
+
+def should_force_include_text(normalized_text: str) -> bool:
+    return any(phrase in normalized_text for phrase in INCLUDE_DIRECTIVES + ALWAYS_INCLUDE_PHRASES)
 
 
 def normalize_directive_text(text: str) -> str:

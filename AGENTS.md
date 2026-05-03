@@ -107,6 +107,8 @@ Creator voice directives are handled locally before OpenAI selection:
 
 - `corta isso aqui` and close variants remove the current candidate plus immediate previous/next candidates.
 - `isso precisa aparecer no vídeo` and close variants force the current candidate plus immediate previous/next candidates into the plan.
+- Intro phrases such as `bem vindo`, `bom dia`, `boa tarde`, and `boa noite` force inclusion with adjacent context.
+- Outro phrases such as `obrigado por assistir`, `até mais`, and `valeu` force inclusion with adjacent context.
 
 Keep these phrases normalized accent-insensitively, and bump candidate/plan cache versions when directive behavior changes.
 

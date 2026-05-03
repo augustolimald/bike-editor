@@ -123,6 +123,8 @@ Você também pode dar comandos durante a gravação:
 
 - Dizer `corta isso aqui` remove o trecho atual e os candidatos imediatamente anterior e posterior.
 - Dizer `isso precisa aparecer no vídeo` força a inclusão do trecho atual e dos candidatos imediatamente anterior e posterior.
+- Frases típicas de introdução como `bem vindo`, `bom dia`, `boa tarde` e `boa noite` são incluídas automaticamente.
+- Frases típicas de despedida como `obrigado por assistir`, `até mais` e `valeu` também são incluídas automaticamente.
 
 Esses comandos são aplicados localmente a partir da transcrição antes da IA escolher o plano, então servem como direção editorial explícita para vídeos futuros.
 
